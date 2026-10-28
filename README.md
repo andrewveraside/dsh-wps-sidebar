@@ -91,7 +91,9 @@ AI 只有在调用保存时才写入文件，不会替你关闭文档。
 | `office_read` | 把打开的文档读成文本（段落 / 单元格 / 形状） |
 | `office_edit` | 按顺序执行一批修改，不保存 |
 | `office_render` | 把一页 / 一张幻灯片 / 一个单元格区域渲染成图片；Word 和 PowerPoint 一次最多看 4 页，或用总览把全部页面拼成一张图 |
-| `office_save` | 保存；给出路径时另存为，扩展名为 `.pdf` 时导出 PDF；改完没看过成品时附带各页图片 |
+| `office_save` | 保存；给出路径时另存为，扩展名为 `.pdf` 时导出 PDF；改完没看过成品时附带各页图片。每次保存前把改动前的版本留在文档旁的 `.dsh-versions` 里（每个文档保留最近 50 份），可用 `no_version: true` 跳过 |
+| `office_versions` | 列出一个文档存过的版本，最新的在前：时间、原因、大小 |
+| `office_revert` | 把文档退回到某个版本：版本内容盖回文件，文档关掉再打开，窗口里和下一次读取都是恢复后的内容；可先保留当前内容为版本 |
 | `office_close` | 关闭 AI 自己打开或新建的文档；你原本开着的文档会被拒绝，有未保存修改时必须明确说保存还是丢弃 |
 | `office_help` | 列出某个应用（Word / Excel / PowerPoint）下 `office_edit` 的全部操作和字段 |
 
@@ -100,6 +102,20 @@ AI 只有在调用保存时才写入文件，不会替你关闭文档。
 - Word：`insert_diagram`（流程图、结构图：用 Word 自己的形状画在文档里，节点按行列摆放，连线自动走直角，画完仍可逐个编辑）、`insert_paragraphs`、`set_text`、`replace_text`、`format_text`、`delete_range`、`insert_table`、`set_cell`、`insert_image`、`set_image`、`format_table`、`insert_references`、`insert_footnote`、`edit_footnote`、`delete_footnote`、`footnote_settings`、`style_format`、`page_setup`、`page_numbers`、`header`、`page_break`、`insert_toc`、`update_fields`
 - Excel：`write_range`（值或公式）、`format_range`、`autofit`、`insert_rows`、`delete_rows`、`add_sheet`、`rename_sheet`、`delete_sheet`、`add_chart`
 - PowerPoint：`theme`（配色之外还可定卡片、圆角、项目符号的样式，以及 LaTeX Beamer 风格的外框）、`slide`（成品版式；其中 `grid` 由 AI 按行列自由组合图表、数字、表格、步骤、引语等部件，不用给坐标）、`add_slide`、`set_text`、`format_text`、`add_textbox`、`add_image`、`add_smartart`、`add_table`、`add_shape`、`set_shape`、`delete_shape`、`delete_slide`、`move_slide`、`duplicate_slide`、`set_layout`、`set_background`、`set_notes`
+
+## 版本存档（类似 git）
+
+每次 `office_save` 前，插件会先把**磁盘上改动前的那份文件**复制到文档旁的隐藏目录：
+
+```
+<文档目录>\.dsh-versions\<文档名>\2026-10-28_20-39-48-752_after-edit.docx
+```
+
+- 版本记的是「这次保存**之前**文档的样子」，所以回退到某个版本 = 回到那次改动之前——和 git 的语义一致。
+- 每个文档保留最近 50 份，更旧的自动删除；目录在资源管理器里是隐藏的，跟着文档走，换电脑一并带走。
+- 想跳过某次存档（比如例行保存不需要留档）用 `office_save {"no_version": true}`；想给版本起个可读名字用 `version_note: "before-rewrite"`。
+- 列出版本：`office_versions {"path": "E:\\报告.docx"}`；回退：`office_revert {"path": "E:\\报告.docx", "version": "latest"}`（也可填版本号前缀、`oldest`）。回退默认先把当前内容也存成版本，`keep: false` 可跳过。
+- 回退会关掉文档再从磁盘重开，所以窗口里看到的就是恢复后的内容。
 
 ## 原生脚注
 

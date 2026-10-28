@@ -1,7 +1,7 @@
 {
   "name": "@andrewveraside/dsh-wps-sidebar",
-  "version": "1.3.1",
-  "description": "DeepSeek Harness 的 WPS 侧栏办公插件（Windows）：AI 直接在你打开的 WPS 文字 / 表格 / 演示里改文档，改动实时出现在窗口中，你可以同时编辑；读结构、批量编辑、渲染成图核对、保存。在 WPS 基础上补齐题注与交叉引用、修订留痕与对比、域、分节、透视表刷新与切片器、表格转区间、数字格式、图片与形状。",
+  "version": "1.4.0",
+  "description": "DeepSeek Harness 的 WPS 侧栏办公插件（Windows）：AI 直接在你打开的 WPS 文字 / 表格 / 演示里改文档，改动实时出现在窗口中，你可以同时编辑；读结构、批量编辑、渲染成图核对、保存。在 WPS 基础上补齐题注与交叉引用、修订留痕与对比、域、分节、透视表刷新与切片器、表格转区间、数字格式、图片与形状，以及类似 git 的版本存档：每次保存前把上一版留在文档旁的 .dsh-versions 里，可随时列出版本并回退。",
   "type": "module",
   "author": "andrewveraside",
   "homepage": "https://github.com/andrewveraside/dsh-wps-sidebar",

@@ -889,6 +889,8 @@ static class Program
         }
         dynamic app = AppFor(kind, a);
         WaitReady(kind, app);
+        if (cmd == "versions") return ListVersions(a);
+        if (cmd == "snapshot") return SnapshotNow(kind, app, a);
         dynamic doc = Doc(kind, app, a);
         if (cardStarted && CardOn && !Hidden.Contains((string)doc.FullName) && (cmd == "read" || cmd == "render" || cmd == "save"))
         {
@@ -902,6 +904,7 @@ static class Program
         if (cmd == "edit") return Edit(kind, app, doc, a);
         if (cmd == "render") return Render(kind, app, doc, a);
         if (cmd == "save") return Save(kind, app, doc, a);
+        if (cmd == "revert") return RevertVersion(kind, app, doc, a);
         if (cmd == "close") return Close(kind, doc, a);
         if (cmd == "view")
         {
@@ -1063,6 +1066,25 @@ static class Program
         }
     }
 
+    /// <summary>Take a version now, asking for no edit: useful before a risky change.</summary>
+    static object SnapshotNow(string kind, dynamic app, Bag a)
+    {
+        string docPath = a.Str("path", null);
+        if (docPath == null)
+        {
+            dynamic doc = Doc(kind, app, a);
+            docPath = (string)doc.FullName;
+            if (((string)doc.Path).Length > 0 && a.Flag("flush", true)) { try { doc.Save(); } catch (Exception) { } }
+        }
+        string kept = Snapshot(Path.GetFullPath(docPath), a.Str("note", "manual"));
+        Dictionary<string, object> result = new Dictionary<string, object>();
+        result["path"] = Path.GetFullPath(docPath);
+        result["version"] = kept;
+        result["dir"] = VersionDir(docPath);
+        result["count"] = VersionFiles(docPath).Length;
+        return result;
+    }
+
     static object Save(string kind, dynamic app, dynamic doc, Bag a)
     {
         if (kind == "word") Refresh(doc);
@@ -1071,16 +1093,22 @@ static class Program
         if (path == null)
         {
             if (((string)doc.Path).Length == 0) throw new Fail("NEEDS_PATH", "This document has never been saved: give \"path\" to say where.");
+            // Keep what is on disk before overwriting it, unless the caller says otherwise.
+            string kept = null;
+            if (!a.Flag("no_version", false)) kept = Snapshot((string)doc.FullName, a.Str("version_note", "save"));
             doc.Save();
             result["path"] = (string)doc.FullName;
+            if (kept != null) result["version"] = kept;
         }
         else
         {
             if (!Path.IsPathRooted(path)) throw new Fail("BAD_ARGS", "\"path\" must be an absolute path.");
             path = Path.GetFullPath(path);
             if (!Directory.Exists(Path.GetDirectoryName(path))) MakeFolder(path);
+            string kept = a.Flag("no_version", false) ? null : Snapshot(path, a.Str("version_note", "save"));
             SaveAs(kind, app, doc, path);
             result["path"] = path;
+            if (kept != null) result["version"] = kept;
         }
         result["bytes"] = new FileInfo((string)result["path"]).Length;
         return result;
@@ -1238,6 +1266,153 @@ static class Program
     {
         try { Directory.CreateDirectory(Path.GetDirectoryName(path)); }
         catch (Exception error) { throw new Fail("BAD_ARGS", "The folder of \"" + path + "\" does not exist and could not be made: " + error.Message.Trim()); }
+    }
+
+    // ----- version history -------------------------------------------------
+    // Every save keeps the file that was on disk before it in ".dsh-versions/<name>/",
+    // so a version is the document as it stood *before* a given change. The folder is
+    // hidden in Explorer. Oldest snapshots beyond KeepVersions are removed.
+
+    const string VersionsFolder = ".dsh-versions";
+    const int KeepVersions = 50;
+
+    /// <summary>The version folder of one document: "&lt;its folder&gt;/.dsh-versions/&lt;its name&gt;".</summary>
+    static string VersionDir(string docPath)
+    {
+        string full = Path.GetFullPath(docPath);
+        string folder = Path.GetDirectoryName(full);
+        string name = Path.GetFileName(full);
+        foreach (char bad in Path.GetInvalidFileNameChars()) name = name.Replace(bad, '_');
+        return Path.Combine(folder, VersionsFolder, name);
+    }
+
+    static string[] VersionFiles(string docPath)
+    {
+        string dir = VersionDir(docPath);
+        if (!Directory.Exists(dir)) return new string[0];
+        string[] files = Directory.GetFiles(dir, "*" + Path.GetExtension(docPath));
+        Array.Sort(files, StringComparer.Ordinal);
+        return files;
+    }
+
+    static void HideVersionFolder(string docPath)
+    {
+        string dir = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(docPath)), VersionsFolder);
+        try
+        {
+            if (!Directory.Exists(dir)) return;
+            if ((File.GetAttributes(dir) & FileAttributes.Hidden) != 0) return;
+            File.SetAttributes(dir, File.GetAttributes(dir) | FileAttributes.Hidden);
+        }
+        catch (Exception error) { Trace("could not hide " + dir + ": " + error.Message); }
+    }
+
+    /// <summary>
+    /// Copy the file as it is on disk now into the version folder. Returns the snapshot path,
+    /// or null when there is nothing to keep (the document has never been saved to disk).
+    /// </summary>
+    static string Snapshot(string docPath, string reason)
+    {
+        if (string.IsNullOrEmpty(docPath)) return null;
+        try { if (!File.Exists(docPath)) return null; } catch (Exception) { return null; }
+        string dir = VersionDir(docPath);
+        Directory.CreateDirectory(dir);
+        string stamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss-fff");
+        string target = Path.Combine(dir, stamp + "_" + reason + Path.GetExtension(docPath));
+        for (int n = 2; File.Exists(target); n++) target = Path.Combine(dir, stamp + "-" + n + "_" + reason + Path.GetExtension(docPath));
+        File.Copy(docPath, target, false);
+        HideVersionFolder(docPath);
+        PruneVersions(docPath);
+        return target;
+    }
+
+    static void PruneVersions(string docPath)
+    {
+        string[] files = VersionFiles(docPath);
+        if (files.Length <= KeepVersions) return;
+        for (int i = 0; i < files.Length - KeepVersions; i++)
+        {
+            try { File.Delete(files[i]); }
+            catch (Exception error) { Trace("could not delete old version " + files[i] + ": " + error.Message); }
+        }
+    }
+
+    /// <summary>List the versions of a document, newest first, with their size and time.</summary>
+    static object ListVersions(Bag a)
+    {
+        string docPath = Path.GetFullPath(a.Need("path"));
+        Dictionary<string, object> result = new Dictionary<string, object>();
+        result["path"] = docPath;
+        result["dir"] = VersionDir(docPath);
+        List<object> items = new List<object>();
+        string[] files = VersionFiles(docPath);
+        for (int i = files.Length - 1; i >= 0; i--)
+        {
+            FileInfo info = new FileInfo(files[i]);
+            string stem = Path.GetFileNameWithoutExtension(files[i]);
+            // "2026-10-28_20-39-09-555_aftersecond": the stamp itself holds an underscore, so split on the last one.
+            int cut = stem.LastIndexOf('_');
+            Dictionary<string, object> item = new Dictionary<string, object>();
+            item["file"] = files[i];
+            item["version"] = cut > 0 ? stem.Substring(0, cut) : stem;
+            item["reason"] = cut > 0 && cut + 1 < stem.Length ? stem.Substring(cut + 1) : "";
+            item["bytes"] = info.Length;
+            item["time"] = info.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss");
+            items.Add(item);
+        }
+        result["count"] = items.Count;
+        result["items"] = items;
+        result["keep"] = KeepVersions;
+        return result;
+    }
+
+    /// <summary>
+    /// Put a version back into the open document: the snapshot's bytes replace the file on
+    /// disk, the document is closed without saving and opened again, so what the user sees
+    /// and what the next read returns are the restored content.
+    /// </summary>
+    static object RevertVersion(string kind, dynamic app, dynamic doc, Bag a)
+    {
+        string docPath = Path.GetFullPath(a.Need("path"));
+        if (!File.Exists(docPath)) throw new Fail("BAD_ARGS", "The document \"" + docPath + "\" is not on disk.");
+        string[] files = VersionFiles(docPath);
+        if (files.Length == 0) throw new Fail("ANCHOR_MISSING", "There are no versions of \"" + docPath + "\" yet: they are made on every save.");
+        string wanted = a.Str("version", null);
+        string chosen;
+        if (wanted == null || wanted == "latest" || wanted == "-1") chosen = files[files.Length - 1];
+        else if (wanted == "oldest") chosen = files[0];
+        else
+        {
+            chosen = null;
+            string tail = "_" + Path.GetExtension(docPath);
+            for (int i = files.Length - 1; i >= 0; i--) if (Path.GetFileName(files[i]).StartsWith(wanted)) { chosen = files[i]; break; }
+            if (chosen == null) throw new Fail("ANCHOR_MISSING", "No version \"" + wanted + "\" of \"" + docPath + "\". Ask for the list first.");
+        }
+        if (!a.Flag("keep", true)) Snapshot(docPath, "revert");
+        string closing = (string)doc.FullName;
+        bool inOwn = false;
+        try { inOwn = Find(kind, Running(kind), closing) != null; } catch (Exception) { }
+        if (kind == "word") doc.Close(0); else if (kind == "excel") doc.Close(false); else doc.Close();
+        File.Copy(chosen, docPath, true);
+        if (!inOwn) Started.Remove(Key(kind));
+        // Open it again, so the window shows the restored content and the next command finds it open.
+        string reopened = null;
+        try
+        {
+            dynamic again = AppFor(kind, a);
+            dynamic docs = Docs(kind, again);
+            dynamic back = kind == "ppt" ? docs.Open(docPath, 0, 0, -1) : docs.Open(docPath);
+            try { if (kind == "ppt") back.Windows[1].Activate(); else back.Activate(); } catch (Exception) { }
+            try { reopened = (string)back.FullName; } catch (Exception) { }
+        }
+        catch (Exception error) { Trace("could not reopen " + docPath + " after the revert: " + error.Message); }
+        Dictionary<string, object> result = new Dictionary<string, object>();
+        result["path"] = docPath;
+        result["restored"] = chosen;
+        result["version"] = Path.GetFileNameWithoutExtension(chosen);
+        result["closed"] = true;
+        result["reopened"] = reopened != null;
+        return result;
     }
 
     static void Remember(dynamic doc)
