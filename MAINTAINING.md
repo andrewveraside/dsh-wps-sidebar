@@ -2,7 +2,7 @@
 
 > 给接手维护这个插件的人（或新的 DSH 工作区）看的。日常使用看 [README](README.md)，这里只讲**怎么改、怎么测、怎么发**，以及**踩过的坑**。
 >
-> 最后更新：2026-10-28 · 版本 1.4.0
+> 最后更新：2026-10-29 · 版本 1.4.0
 
 ---
 
@@ -25,7 +25,9 @@
 | `cordis.patch.yml` | 插件默认配置（`suite: wps` 硬钉） | 改默认设置时改 |
 | `package.json` | 版本号、`files` 白名单、`dsh` 元数据 | 发版时改版本号 |
 | `README.md` | 用户文档 | 加功能时补 |
-| `_build_helper.ps1` | 编译 helper 的脚本 | 本地用，**不入库** |
+| `scripts/build-helper.ps1` | 编译 helper（**入库**，见 §3.1） | 改编译参数时改 |
+| `scripts/office-smoke.mjs` | 冒烟测试（**入库**，见 §3.3） | 加 op / 改协议时补 |
+| `scripts/lib/helper.cjs` | 冒烟测试用的最小 helper 客户端 | 改协议（stdio）时改 |
 
 ### `helper/OfficeHelper.cs` 内部结构（加 op 时按这个找位置）
 
@@ -43,7 +45,7 @@
 1. 在 `helper` 的 `Edit()` 分派链里加一个 `if (type == "你的op") return YourOp(...);`
 2. 写 `static string YourOp(dynamic doc, Bag a)`，用 `a.Need("x")` 取必填、`a.Str("x", 默认)` 取可选
 3. 在 `lib/index.js` 的 `office_help` 文案和 README 里补上
-4. 编译 → 用 `_test/` 下的探针脚本实测
+4. 编译 → 用 `scripts/office-smoke.mjs` 实测（或照它的写法加一步）
 
 加一个**新工具**（不只是 op）的套路：在 `lib/index.js` 里 `tools.push(defineTool({...}))`，照抄 `office_versions` 的写法（参数用 `DOC` / `APP` 复用、`output`、`timeoutMs`、`execute`、`presentCall`），然后调 `helper.call("<cmd>", ...)`，并在 `helper` 的 `Handle()` 里加对应 `cmd` 分支。
 
@@ -55,14 +57,14 @@
 
 ### 3.1 编译 helper
 
-```bash
-cd /e/DshData/dsh-office-wps
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "E:\DshData\dsh-office-wps\_build_helper.ps1"
+```powershell
+cd E:\DshData\dsh-office-wps
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\build-helper.ps1
 ```
 
-脚本做的事：按源码 SHA256 前 12 位算 hash → kill 掉占用 exe 的 `office-helper.exe` → 用系统 `csc.exe` 编到 `%LOCALAPPDATA%\dsh-office\helper-<hash>\office-helper.exe`。
+脚本做的事：按源码 SHA256 前 12 位算 hash → kill 掉占用 exe 的 `office-helper.exe` → 用系统 `csc.exe` 编到 `%LOCALAPPDATA%\dsh-office\helper-<hash>\office-helper.exe`。缓存目录写不进去时自动改在 `%TEMP%\dsh-helper-build-<PID>\` 编好再拷回来。
 
-> ⚠️ **坑 1：脚本必须指向工作副本**。曾经它指向 `node_modules` 里的安装副本，导致改了源码 exe 毫无变化，白排查半小时。现在已修正为 `E:\DshData\dsh-office-wps\helper\OfficeHelper.cs`。
+> ⚠️ **坑 1：脚本必须指向工作副本**。曾指向 `node_modules` 里的安装副本，改了源码 exe 毫无变化，白排查半小时。现在默认 `-RepoRoot` 就是仓库根，指向 `helper\OfficeHelper.cs`；用 `-RepoRoot` 参数可指向别的 checkout。
 >
 > ⚠️ **坑 2：exe 被占用会编译失败**（`CS0016: 未能写入输出文件`）。脚本会自动 kill，但如果 DSH 正在跑，kill 后 DSH 下次调用会重新拉起——所以改完记得重启 DSH。
 
@@ -82,19 +84,32 @@ for k in ['你的新字符串','VersionsFolder']:
 
 ### 3.3 实测
 
-`_test/` 下有一堆 `.cjs` 探针脚本（`ver_e2e.cjs`、`probe*.cjs`、`closeall.cjs`……）。它们是**直接跟 helper 进程讲 stdin/stdout JSON 协议**，不经过 DSH，所以改完立刻能测。
-
 ```bash
-node _test/ver_e2e.cjs
+cd /e/DshData/dsh-office-wps
+node scripts/office-smoke.mjs            # = npm run smoke；退出码 0 = 全过
+node scripts/office-smoke.mjs --keep     # 留下 %TEMP%\dsh-smoke-* 里的 docx / png / 版本，便于人眼看
 ```
 
+它在一个临时目录造 docx，然后**在同一个 helper 进程里**跑完整生命周期并逐条断言：
+
+`status → open(how=opened) → read(读到夹具文字) → edit(insert_paragraphs) → read(改动可见) → render(必须给 out，校验 png >1KB) → save → versions(有快照) → revert(最新那份) → read(改动已回滚) → close`，最后删临时目录。
+
+约 4 秒跑完。**改 helper 协议 / 加 op 后先跑它**，比在 DSH 里手点一遍快得多。`_test/` 下那些老探针是本地残留、不入库（`.gitignore` 已排除），需要一次性深挖时照写。
+
 > ⚠️ **坑 4（最坑）**：heredoc 里写 Windows 路径的**反斜杠会被吃掉**。`'E:\\DshData\\x\\_vtest\\v.docx'` 里的 `\v`、`\t` 会被 Node 字符串字面量当转义序列，wps 拿到 `E:DshDatadsh-office-wps_vtest\test.docx`，报中文 COM 错误「**路径中具有非法字符**」。看起来像插件 bug，其实是测试脚本的问题。**一律用正斜杠 `E:/xxx/y.docx`**。
+>
+> ⚠️ **坑 4b：stdio 只有一种摆法能跑（2026-10-29 逐个探过）**。测试客户端把 helper 的输出**重定向到文件**、自己轮询**同一个读写句柄**；命令**走真管道**（`stdio:['pipe', outFd, errFd]` + `proc.stdin.write`）。踩过的三种摆法全部失败：
+> - stdin 给**文件**句柄：helper 打完 `{"event":"ready"}` 立刻 EOF、exit 0，一条命令都不回（`cmd /c "helper < in > out"` 同样）；句柄换成可写则 `ReadLine` 抛 `UnauthorizedAccessException: 对路径的访问被拒绝`；
+> - stdout 先 `writeFileSync` 再**另开只读句柄**读：读不到子进程写的字节；
+> - 完全不重定向（继承控制台）：在 DSH 的伪控制台里 helper 拿不到控制台，起来就退。
+>
+> 细节写在 `scripts/lib/helper.cjs` 文件头，改这段前先读。
 >
 > ⚠️ **坑 5**：helper 协议里定位「已打开的文档」用 **`doc`** 字段；`path` 只在 `open`（要打开的文件）/ `save`（另存为）/ `versions`、`revert`（目标文件）里用。`{cmd:'open', app:'word', ...D}` 里 D 是 `{doc:P}` 的话，open 拿不到 path 会**静默新建一个空白文档**（返回 `how:"created"`，不报错）。
 >
 > ⚠️ **坑 6**：每个 helper 进程是独立状态。上一个脚本打开的文档，新脚本里看不到，会报 `NO_DOCUMENT`。要在**同一个进程**里跑完整流程。
 >
-> ⚠️ **坑 7**：测试前先关掉 WPS 里占着测试文件的文档，否则 `rm` 报 `Device or resource busy`。用 `node _test/closeall.cjs`。
+> ⚠️ **坑 7**：测试前先关掉 WPS 里占着测试文件的文档，否则 `rm` 报 `Device or resource busy`。冒烟测试用独立临时目录，一般不受影响；残留下来的 `probe-*` 目录若被某个 WPS 窗口占着，先在 WPS 里关掉那个窗口。
 
 ### 3.4 打包安装
 
@@ -133,6 +148,8 @@ cd /e/DshData/.dsh/profiles/desktop
 | bash | Git Bash；`pwsh.exe` 不存在，只有 `powershell.exe` |
 
 > ⚠️ `csc.exe` 的 `/nologo` 等 MSVC 风格参数在 Git Bash 下会被当成路径。**必须写 .ps1 用 `powershell.exe -File` 跑**，且 `.ps1` 里别写中文（GBK 会截断），测试脚本一律纯 ASCII。
+
+> ⚠️ `git push` 直连常报 `Recv failure: Connection was reset`（本机走 127.0.0.1:7897 的代理，git 没配）。临时用 `git -c http.proxy=http://127.0.0.1:7897 push origin main`，不要为此改全局 git 配置。
 
 ## 5. 坑：WPS 抢注了微软 Office 的 ProgID
 
@@ -205,6 +222,6 @@ cd /e/DshData/.dsh/profiles/desktop
 
 1. `git log --oneline -5` 看最近改了什么
 2. 读本文件 §3 确认开发循环还能跑（编译 → 测试 → 打包 → 安装）
-3. 确认 `_build_helper.ps1` 里的 `$src` 指向**工作副本**（`E:\DshData\dsh-office-wps\helper\OfficeHelper.cs`），不是 node_modules
+3. 确认 `scripts/build-helper.ps1` 编译的是**工作副本**（`E:\DshData\dsh-office-wps\helper\OfficeHelper.cs`），不是 node_modules；跑 `node scripts/office-smoke.mjs` 确认 14/14 绿
 4. 确认 `package.json` 版本号 / `git status` 干净
 5. 想加功能前先读 §2 的表，找到对应文件
