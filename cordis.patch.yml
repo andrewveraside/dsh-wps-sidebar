@@ -1,0 +1,4 @@
+- insert:
+    - id: andrewveraside-wps-sidebar
+      name: '@andrewveraside/dsh-wps-sidebar'
+      config: {}

@@ -1,0 +1,39 @@
+# 依赖
+node_modules/
+pnpm-lock.yaml
+
+# 打包产物
+*.tgz
+
+# 构建缓存
+_hb/
+dist/
+build/
+
+# 探测与测试用的一次性脚本（本地调试残留，不入库）
+_fix*.py
+_patch*.py
+_probe*.py
+_probe_out.txt
+_rename.py
+_build_helper.ps1
+_wm_src.txt
+_test/
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.vscode/
+.idea/
+
+# 日志
+*.log
+npm-debug.log*
+
+# 环境变量
+.env
+.env.*
+*.bak*
+*.bak-before-*
